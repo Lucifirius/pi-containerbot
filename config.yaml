@@ -1,0 +1,49 @@
+# EVE Fuel Block Monitor — config.yaml
+# Place this file in the data/ directory next to docker-compose.yml.
+# ─────────────────────────────────────────────────────────────────────────────
+# Prerequisites:
+#   1. Create an ESI app at https://developers.eveonline.com/
+#        Connection type : Authentication & API Access
+#        Scope           : esi-assets.read_corporation_assets.v1
+#        Callback URL    : http://localhost:8182/callback
+#   2. Create a Discord webhook:
+#        Channel Settings → Integrations → Webhooks → New Webhook → Copy URL
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── EVE ESI Application ──────────────────────────────────────────────────────
+client_id: "YOUR_ESI_CLIENT_ID_HERE"
+
+
+# ── Location (required) ───────────────────────────────────────────────────────
+# The station or Upwell structure ID where the corp hangar lives.
+#   NPC stations    : 8-digit IDs  e.g. 60003760 = Jita 4-4
+#   Player structures: 13-digit IDs e.g. 1030049082235
+# Find it at https://everef.net/search or via Show Info in-game.
+location_id: 60003760
+
+
+# ── Container filter (recommended) ───────────────────────────────────────────
+# Leave container_id blank on the first run — the bot will list every container
+# at location_id so you can pick the right one and paste its ID here.
+container_id:    # e.g. 1038291837452
+
+
+# ── Alert threshold ───────────────────────────────────────────────────────────
+# Fire an alert when total fuel blocks fall below this number.
+# Set to 0 to disable (reports still post on every check).
+alert_threshold: 500
+
+
+# ── Discord ───────────────────────────────────────────────────────────────────
+discord:
+  # Full webhook URL from Discord channel → Integrations → Webhooks.
+  webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+
+  # post_on_alert_only: false → post a report on every check  (default)
+  # post_on_alert_only: true  → only post when fuel is below alert_threshold
+  post_on_alert_only: false
+
+  # Optional: Discord role ID to @mention when an alert fires.
+  # Enable Developer Mode in Discord, then right-click the role → Copy Role ID.
+  # Leave blank ("") to disable mentions.
+  mention_role_id: ""
