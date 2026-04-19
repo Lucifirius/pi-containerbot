@@ -5,7 +5,7 @@
 #   1. Create an ESI app at https://developers.eveonline.com/
 #        Connection type : Authentication & API Access
 #        Scope           : esi-assets.read_corporation_assets.v1
-#        Callback URL    : http://localhost:8182/callback
+#        Callback URL    : http://localhost/callback
 #   2. Create a Discord webhook:
 #        Channel Settings → Integrations → Webhooks → New Webhook → Copy URL
 # ─────────────────────────────────────────────────────────────────────────────

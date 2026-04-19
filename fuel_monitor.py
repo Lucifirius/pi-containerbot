@@ -10,8 +10,6 @@ Requires Director role on your character.
 Environment variables (override defaults, useful in Docker):
   CONFIG_PATH   path to config.yaml  (default: ./config.yaml)
   TOKEN_PATH    path to tokens.json  (default: ./tokens.json)
-  CALLBACK_HOST host shown in the auth URL (default: localhost)
-  CALLBACK_PORT TCP port for the OAuth callback server (default: 8182)
 
 Usage:
   python fuel_monitor.py --auth          # interactive EVE SSO login (run once)
@@ -30,9 +28,7 @@ import sys
 import time
 import webbrowser
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from threading import Event
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
@@ -40,11 +36,14 @@ import yaml
 
 # ── Runtime paths (overridable via env for Docker) ───────────────────────────
 
-CONFIG_FILE    = Path(os.environ.get("CONFIG_PATH",   "config.yaml"))
-TOKEN_FILE     = Path(os.environ.get("TOKEN_PATH",    "tokens.json"))
-CALLBACK_HOST  = os.environ.get("CALLBACK_HOST", "localhost")
-CALLBACK_PORT  = int(os.environ.get("CALLBACK_PORT",  "8182"))
-CALLBACK_URL   = f"http://{CALLBACK_HOST}:{CALLBACK_PORT}/callback"
+CONFIG_FILE  = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
+TOKEN_FILE   = Path(os.environ.get("TOKEN_PATH",  "tokens.json"))
+
+# The redirect URI registered in your ESI app.
+# EVE SSO redirects here after login; we extract the code from the terminal
+# instead of running a local server, so the URI just needs to match your app
+# registration — it does not need to be reachable.
+CALLBACK_URL = "http://localhost/callback"
 
 # ── ESI / SSO constants ───────────────────────────────────────────────────────
 
@@ -152,10 +151,14 @@ def get_valid_token(cfg: dict) -> str:
 
 def do_auth(cfg: dict):
     """
-    Interactive PKCE auth flow.
-    In Docker: the container binds CALLBACK_PORT and prints the URL;
-               open it in your host browser. The callback is caught by the
-               container's HTTP server (port must be published in docker-compose).
+    Interactive PKCE auth flow — no local HTTP server required.
+
+    Workflow:
+      1. Prints the EVE SSO login URL (and tries to open it in a browser).
+      2. User logs in; EVE redirects to CALLBACK_URL which won't load —
+         that's fine. The user copies the full redirect URL (or just the
+         code= value) from the browser address bar and pastes it here.
+      3. We extract the code, exchange it for tokens, and save tokens.json.
     """
     verifier, challenge = generate_pkce()
     state = secrets.token_hex(8)
@@ -171,59 +174,59 @@ def do_auth(cfg: dict):
     }
     auth_url = f"{SSO_AUTH_URL}?{urlencode(params)}"
 
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 65)
     print("  EVE SSO Authentication")
-    print("═" * 60)
-    print("\n  Open this URL in your browser to log in:\n")
+    print("═" * 65)
+    print("\n  Step 1 — Open this URL in your browser:\n")
     print(f"  {auth_url}\n")
-    print("═" * 60 + "\n")
+    print("  Step 2 — Log in with your Director character and approve the scope.")
+    print()
+    print("  Step 3 — Your browser will be redirected to a page that")
+    print(f"           won't load (that's expected). Copy the full URL")
+    print(f"           from your browser's address bar and paste it below.")
+    print("           It looks like:  http://localhost/callback?code=...&state=...")
+    print("           You can also paste just the code= value if you prefer.")
+    print("═" * 65 + "\n")
 
-    # Try to open the browser (works on host; silently fails inside Docker)
+    # Try to open the browser; silently ignore failures (e.g. headless Docker)
     try:
         webbrowser.open(auth_url)
     except Exception:
         pass
 
-    received_code: list[str]  = []
-    received_state: list[str] = []
-    done = Event()
+    # Prompt until we get a non-empty response
+    while True:
+        raw = input("  Paste the redirect URL (or code value) here: ").strip()
+        if raw:
+            break
+        print("  [!] Nothing entered — please try again.")
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            qs = parse_qs(urlparse(self.path).query)
-            received_code.extend(qs.get("code", []))
-            received_state.extend(qs.get("state", []))
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(
-                b"<h2 style='font-family:sans-serif'>Auth successful! "
-                b"You can close this tab.</h2>"
-            )
-            done.set()
+    # Accept either the full redirect URL or a bare code value
+    if raw.startswith("http"):
+        qs   = parse_qs(urlparse(raw).query)
+        code = qs.get("code", [None])[0]
+        got_state = qs.get("state", [None])[0]
+    else:
+        # User pasted the raw code string (or "code=xxxxx")
+        if raw.startswith("code="):
+            raw = raw[len("code="):]
+        code = raw
+        got_state = None   # can't verify state from a bare code
 
-        def log_message(self, *_):
-            pass
-
-    # Bind to 0.0.0.0 so the published Docker port reaches the server
-    server = HTTPServer(("0.0.0.0", CALLBACK_PORT), Handler)
-    server.timeout = 300
-    print(f"[…] Waiting for OAuth callback on port {CALLBACK_PORT} (timeout 5 min)…")
-    while not done.is_set():
-        server.handle_request()
-    server.server_close()
-
-    if not received_code:
-        print("[ERROR] No authorization code received.")
-        sys.exit(1)
-    if received_state[0] != state:
-        print("[ERROR] State mismatch — possible CSRF attack.")
+    if not code:
+        print("\n[ERROR] Could not find a 'code' value in what you pasted.")
+        print("        Make sure you copy the full address-bar URL after the redirect.")
         sys.exit(1)
 
-    print("[→] Exchanging code for tokens…")
-    tokens = exchange_code(cfg["client_id"], received_code[0], verifier)
+    # Verify state only when we have it (full URL was pasted)
+    if got_state is not None and got_state != state:
+        print("\n[ERROR] State mismatch — the URL may have been tampered with.")
+        sys.exit(1)
 
-    # Decode character info from JWT payload (no signature verification needed)
+    print("\n[→] Exchanging code for tokens…")
+    tokens = exchange_code(cfg["client_id"], code, verifier)
+
+    # Decode character info from the JWT payload (no signature check needed)
     payload_b64    = tokens["access_token"].split(".")[1]
     padding        = 4 - len(payload_b64) % 4
     payload        = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * padding))

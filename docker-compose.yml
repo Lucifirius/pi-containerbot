@@ -1,44 +1,42 @@
 version: "3.9"
 
-# ── Shared volume for config + token persistence ──────────────────────────────
-volumes:
-  fuel_data:
-
-# ── Reusable config block ─────────────────────────────────────────────────────
+# ── Shared config block ───────────────────────────────────────────────────────
 x-common: &common
   build: .
   image: eve-fuel-monitor
   volumes:
-    # Mount the local data/ directory into /data inside the container.
-    # This is where config.yaml is read from and tokens.json is written to.
+    # Local data/ directory is mounted at /data inside the container.
+    # config.yaml is read from here; tokens.json is written here.
     - ./data:/data
   environment:
-    CONFIG_PATH: /data/config.yaml
-    TOKEN_PATH:  /data/tokens.json
-    CALLBACK_HOST: localhost      # must match the redirect URI in your ESI app
-    CALLBACK_PORT: "8182"
+    CONFIG_PATH:      /data/config.yaml
+    TOKEN_PATH:       /data/tokens.json
     PYTHONUNBUFFERED: "1"
 
 services:
 
   # ── auth ────────────────────────────────────────────────────────────────────
-  # Run once interactively to complete the EVE SSO login.
+  # Run once interactively to complete EVE SSO login.
+  # No ports needed — auth is done by pasting the redirect URL in the terminal.
   #
-  #   docker compose run --rm --service-ports auth
+  #   docker compose run --rm auth
   #
-  # The container will print a URL. Open it in your host browser.
-  # EVE SSO redirects to localhost:8182/callback which the container catches.
-  # On success, tokens.json is written into ./data/ and the container exits.
+  # Follow the on-screen instructions:
+  #   1. Open the printed URL in your browser
+  #   2. Log in with your Director character
+  #   3. Copy the full redirect URL from your browser's address bar
+  #   4. Paste it into the terminal prompt
+  # tokens.json is written to ./data/ and the container exits.
   auth:
     <<: *common
     container_name: eve-fuel-auth
-    ports:
-      - "8182:8182"          # publish so the browser callback reaches the container
     command: python fuel_monitor.py --auth
     restart: "no"
+    stdin_open: true   # keep stdin open so input() works
+    tty: true          # allocate a pseudo-TTY for a clean prompt
 
   # ── monitor ─────────────────────────────────────────────────────────────────
-  # Long-running service that polls ESI and posts to Discord on a schedule.
+  # Long-running service — polls ESI and posts to Discord on a schedule.
   #
   #   docker compose up -d monitor
   #   docker compose logs -f monitor
@@ -47,16 +45,14 @@ services:
     <<: *common
     container_name: eve-fuel-monitor
     environment:
-      CONFIG_PATH:     /data/config.yaml
-      TOKEN_PATH:      /data/tokens.json
-      CALLBACK_HOST:   localhost
-      CALLBACK_PORT:   "8182"
+      CONFIG_PATH:      /data/config.yaml
+      TOKEN_PATH:       /data/tokens.json
       PYTHONUNBUFFERED: "1"
-      WATCH_INTERVAL:  "60"     # minutes between checks — change here or in .env
+      WATCH_INTERVAL:   "60"    # minutes between checks; override in .env
     restart: unless-stopped
-    # Health check: verify the token file exists (set by auth step)
     healthcheck:
-      test: ["CMD", "python", "-c", "import json,sys; json.load(open('/data/tokens.json'))"]
+      test: ["CMD", "python", "-c",
+             "import json; json.load(open('/data/tokens.json'))"]
       interval: 5m
       timeout: 10s
       retries: 3
