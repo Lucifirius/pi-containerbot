@@ -1,9 +1,28 @@
 # EVE Online — Corp Hangar Fuel Block Monitor
 
-Monitors fuel block quantities inside a container in a corp hangar via the
-EVE ESI API and posts rich Discord embed reports to a channel of your choice.
+Monitors fuel block quantities inside a specific container in a corp hangar
+via the EVE ESI API. Scans every hour and **posts to Discord only when the
+count changes** — either blocks added or removed — showing a clear before/after
+diff. Silent otherwise.
 
 **Requires Director role** on the authenticated character.
+
+---
+
+## How it works
+
+Every hour the bot:
+
+1. Pulls all corp assets from ESI
+2. Locates the configured container by `item_id` directly (no fragile flag/location filtering)
+3. Counts the fuel blocks inside it, per type and in total
+4. Compares against the last saved count in `data/state.json`
+5. If the count changed → posts a Discord embed showing the diff and new totals
+6. If unchanged → logs to terminal only, no Discord post
+7. Saves the new count to `state.json`
+
+The first run always posts to Discord ("first reading") so you get an immediate
+confirmation that everything is working.
 
 ---
 
@@ -13,72 +32,81 @@ EVE ESI API and posts rich Discord embed reports to a channel of your choice.
 eve_fuel_monitor/
 ├── Dockerfile
 ├── docker-compose.yml
-├── .env                   ← poll interval and other overrides
+├── .env                   ← WATCH_INTERVAL override (default: 60 minutes)
 ├── .dockerignore
 ├── .gitignore
 ├── fuel_monitor.py
 ├── requirements.txt
 └── data/                  ← mounted into the container at /data
-    ├── config.yaml        ← YOU edit this
-    └── tokens.json        ← written automatically after auth
+    ├── config.yaml        ← YOU edit this before first run
+    ├── tokens.json        ← written by --auth, do not edit
+    └── state.json         ← written each check, do not edit
 ```
 
 ---
 
-## Quick start (Docker — recommended)
+## Quick start (Docker)
 
-### 1. Fill in `data/config.yaml`
+### 1. Create an ESI application
 
-Open `data/config.yaml` and set at minimum:
-
-```yaml
-client_id:   "your-esi-client-id"
-location_id: 60003760
-
-discord:
-  webhook_url: "https://discord.com/api/webhooks/..."
-```
-
-See **Configuration reference** below for all options.
-
-### 2. Create an ESI application
-
-1. Go to https://developers.eveonline.com/ and sign in.
-2. **Create new application**:
+1. Go to https://developers.eveonline.com/ and sign in with your EVE account.
+2. Click **Create new application**:
    - Connection type: **Authentication & API Access**
    - Scope: `esi-assets.read_corporation_assets.v1`
    - Callback URL: `http://localhost/callback`
-3. **View Application** → copy the **Client ID** into `data/config.yaml`.
+3. Click **View Application** and copy the **Client ID**.
 
-> The callback URL `http://localhost/callback` does not need to be reachable.
-> After login EVE redirects your browser there; you just copy the URL out of
-> the address bar and paste it into the terminal.
+> The callback URL does not need to be a real server. After you log in, EVE
+> redirects your browser there — the page will fail to load, and that's fine.
+> You just copy the URL from the address bar and paste it into the terminal.
 
-### 3. Build the image
+### 2. Create a Discord Webhook
+
+1. Open the Discord channel you want reports posted to.
+2. **Edit Channel → Integrations → Webhooks → New Webhook**.
+3. Name it (e.g. "Fuel Monitor"), click **Copy Webhook URL**.
+
+### 3. Fill in `data/config.yaml`
+
+```yaml
+client_id:    "your-esi-client-id"
+callback_url: "http://localhost/callback"   # must match ESI app exactly
+
+location_id:  1051781871633    # structure where the corp hangar is
+container_id: 1052272591764    # item_id of the specific container
+hangar_flag:  "CorpSAG2"       # hangar division slot
+
+alert_threshold: 500           # @mention role if total drops below this; 0 = off
+
+discord:
+  webhook_url:     "https://discord.com/api/webhooks/..."
+  mention_role_id: ""          # Discord role ID to ping on low-fuel alerts
+```
+
+### 4. Build the image
 
 ```bash
 docker compose build
 ```
 
-### 4. Authenticate with EVE SSO (once)
+### 5. Authenticate with EVE SSO (once)
 
 ```bash
 docker compose run --rm auth
 ```
 
-The container prints a login URL and a prompt. Follow these steps:
+Follow the on-screen steps:
 
-1. **Open the URL** in your browser (it's printed in the terminal).
-2. **Log in** with your Director character and approve the scope.
-3. EVE redirects your browser to `http://localhost/callback?code=...` — this
-   page won't load, and that's expected.
-4. **Copy the full URL** from your browser's address bar.
-5. **Paste it** into the terminal at the prompt and press Enter.
+1. Open the printed URL in your browser
+2. Log in with your **Director** character and approve the scope
+3. EVE redirects to `http://localhost/callback?code=...` — the page won't load, that's expected
+4. Copy the full URL from your browser's address bar
+5. Paste it at the terminal prompt and press Enter
 
-The container exchanges the code for tokens, writes `data/tokens.json`,
-and exits. You won't need to do this again unless you revoke the app's access.
+`data/tokens.json` is written and the container exits. Tokens refresh automatically
+forever — you only need to do this again if you explicitly revoke the app in EVE.
 
-### 5. Verify Discord (optional but recommended)
+### 6. Verify Discord (optional but recommended)
 
 ```bash
 docker compose run --rm discord-test
@@ -86,12 +114,40 @@ docker compose run --rm discord-test
 
 A test embed appears in your channel. If it doesn't, check `discord.webhook_url`.
 
-### 6. Start the monitor
+### 7. Start the monitor
 
 ```bash
 docker compose up -d monitor
 docker compose logs -f monitor
 ```
+
+The monitor runs indefinitely, checking every 60 minutes and posting to Discord
+only when the fuel count changes.
+
+---
+
+## Discord embed format
+
+When a change is detected, the embed shows:
+
+```
+📦  Giant Secure Container
+
+🟢  OK — 4,800 fuel blocks
+
+📈  +1,200 added  (3,600 → 4,800)
+
+🟢  Caldari Fuel Block    2,400  (+800)
+🟢  Amarr Fuel Block      2,400  (+400)
+```
+
+Status colours:
+- 🟢 Green — fuel levels are above the alert threshold
+- 🟡 Yellow — total is below `alert_threshold` (but container is not empty)
+- 🔴 Red — container is empty
+
+Arrows on each type line show the per-type change since the last reading.
+The first post after startup says "First reading" with no diff.
 
 ---
 
@@ -104,7 +160,7 @@ docker compose logs -f monitor
 # Stop
 docker compose stop monitor
 
-# Restart after a config change (config is re-read on every poll, no rebuild needed)
+# Restart (picks up config changes without rebuild)
 docker compose restart monitor
 
 # Stop and remove containers
@@ -118,7 +174,7 @@ docker compose build && docker compose up -d monitor
 
 Edit `.env`:
 ```
-WATCH_INTERVAL=30   # check every 30 minutes
+WATCH_INTERVAL=30   # check every 30 minutes instead of 60
 ```
 Then `docker compose restart monitor`.
 
@@ -129,36 +185,45 @@ Then `docker compose restart monitor`.
 | Key | Required | Description |
 |-----|----------|-------------|
 | `client_id` | ✓ | ESI application Client ID |
-| `location_id` | ✓ | Station or structure ID of the corp hangar |
-| `container_id` | ✗ | `item_id` of a specific container (most precise) |
-| `alert_threshold` | ✗ | Warn when total blocks fall below this; `0` = off |
-| `discord.webhook_url` | ✓* | Full Discord webhook URL (*required for Discord posts) |
-| `discord.post_on_alert_only` | ✗ | `true` = only post when fuel is low (default: `false`) |
-| `discord.mention_role_id` | ✗ | Discord role ID to @mention on alerts |
+| `callback_url` | ✓ | Callback URL — must match ESI app registration exactly |
+| `location_id` | ✓ | Station or structure ID where the corp hangar is |
+| `container_id` | ✓ | `item_id` of the container to monitor |
+| `hangar_flag` | ✗ | Expected hangar slot (`CorpSAG1`–`7`, `Hangar`, `HangarAll`) — used to verify the container is in the right division |
+| `alert_threshold` | ✗ | @mention the role when total blocks fall below this number; `0` = disabled |
+| `discord.webhook_url` | ✓ | Full Discord webhook URL |
+| `discord.mention_role_id` | ✗ | Discord role ID to @mention when `alert_threshold` is breached |
 
 ### Finding `location_id`
 
-- NPC stations: 8-digit IDs. Search the name at https://everef.net/search
+- NPC stations: 8-digit IDs (e.g. `60003760` = Jita 4-4). Search at https://everef.net/search
 - Player structures: 13-digit IDs. Search the structure name at everef.net, or
-  use the in-game Show Info window.
+  open Show Info in-game and copy the structure ID from the URL or info panel.
 
-### Finding `container_id`
+### Finding `container_id` and `hangar_flag`
 
-Leave it blank on the first run. The bot prints (and posts to Discord) every
-container it finds at `location_id`. Copy the `Container ID` field of your
-target and set it in `config.yaml`. Subsequent runs will filter to that
-container only.
+Run the bot with `--debug` to dump everything ESI returns for your structure:
 
-### Creating a Discord Webhook
+```bash
+docker compose run --rm monitor python fuel_monitor.py --debug
+```
 
-1. Open the target channel → **Edit Channel → Integrations → Webhooks → New Webhook**.
-2. Name it, click **Copy Webhook URL**, paste into `discord.webhook_url`.
+This prints all items at your `location_id` and — if `container_id` is set —
+everything inside the container, including the `location_flag` it reports.
 
-### Getting a Discord Role ID (for @mentions on alerts)
+### Getting a Discord Role ID (for @mentions)
 
-1. Enable **Developer Mode**: User Settings → Advanced → Developer Mode.
+1. Enable **Developer Mode**: Discord → User Settings → Advanced → Developer Mode.
 2. Server Settings → Roles → right-click the role → **Copy Role ID**.
 3. Paste into `discord.mention_role_id`.
+
+---
+
+## State file (`data/state.json`)
+
+The bot writes `data/state.json` after every check to remember the last known
+fuel counts. It survives container restarts because it lives in the `./data/`
+volume mount. Do not edit it manually. To force a fresh "first reading" post
+to Discord (e.g. after changing containers), delete `state.json` and restart.
 
 ---
 
@@ -177,8 +242,9 @@ Environment variables:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CONFIG_PATH` | `./config.yaml` | Path to config file |
-| `TOKEN_PATH` | `./tokens.json` | Path for token storage |
-| `WATCH_INTERVAL` | `60` | Minutes between checks (Docker CMD default) |
+| `TOKEN_PATH` | `./tokens.json` | Path for OAuth token storage |
+| `STATE_PATH` | `./state.json` | Path for fuel count state |
+| `WATCH_INTERVAL` | `60` | Minutes between checks (used by Docker CMD) |
 
 ---
 
@@ -213,11 +279,11 @@ sudo journalctl -u fuel-monitor -f
 ## Security notes
 
 - `data/tokens.json` contains a long-lived OAuth refresh token — treat it like
-  a password. It is listed in `.gitignore` and `.dockerignore`.
-- `data/config.yaml` contains your Discord webhook URL — keep it out of
-  version control too (also in `.gitignore`).
-- The bot uses **PKCE OAuth2** — no client secret is ever stored.
-- Access tokens expire after 20 minutes and refresh automatically.
+  a password. Listed in `.gitignore` and `.dockerignore`.
+- `data/config.yaml` contains your Discord webhook URL — also keep it out of
+  version control (in `.gitignore`).
+- The bot uses **PKCE OAuth2** — no client secret is ever stored anywhere.
+- ESI access tokens expire after 20 minutes and are refreshed automatically.
 - Your EVE account password is never seen by this application.
 - The container runs as a non-root user (`appuser`).
 
@@ -227,10 +293,13 @@ sudo journalctl -u fuel-monitor -f
 
 | Symptom | Fix |
 |---------|-----|
-| `403 Forbidden` from ESI | Character lacks Director role, or wrong ESI scope granted |
-| No containers found | Check `location_id`; clear `container_id` to list all containers |
-| `tokens.json` not found | Re-run `docker compose run --rm auth` |
-| "Could not find a code value" | Make sure you copy the full address-bar URL, not just the page title |
+| `403 Forbidden` from ESI | Character lacks Director role, or wrong ESI scope was granted when authenticating |
+| Container not found | Verify `container_id` is correct; run `--debug` to inspect what ESI returns |
+| Wrong hangar slot error | Update `hangar_flag` in config to match what `--debug` reports |
+| `500 Internal Server Error` from EVE SSO | `callback_url` in config doesn't match the Callback URL in your ESI app — they must be identical |
+| "Could not find a code value" | Copy the full address-bar URL after the redirect, not just part of it |
 | Discord `400 Bad Request` | Webhook URL is malformed |
-| Discord `404 Not Found` | Webhook was deleted — recreate it in Discord |
-| Token expired / invalid | Re-run `docker compose run --rm auth` |
+| Discord `404 Not Found` | Webhook was deleted in Discord — recreate it and update config |
+| No Discord post despite change | Check that `discord.webhook_url` is set; check logs for `[!]` errors |
+| Want to reset the diff baseline | Delete `data/state.json` and restart — next check posts as a "first reading" |
+| Token expired / revoked | Re-run `docker compose run --rm auth` |
