@@ -1,11 +1,11 @@
 # EVE Fuel Block Monitor — config.yaml
-# Place this file in the data/ directory next to docker-compose.yml.
 # ─────────────────────────────────────────────────────────────────────────────
 # Prerequisites:
 #   1. Create an ESI app at https://developers.eveonline.com/
 #        Connection type : Authentication & API Access
 #        Scope           : esi-assets.read_corporation_assets.v1
-#        Callback URL    : http://localhost/callback
+#        Callback URL    : set this to whatever you put in callback_url below
+#                          (any URL works — it just needs to match exactly)
 #   2. Create a Discord webhook:
 #        Channel Settings → Integrations → Webhooks → New Webhook → Copy URL
 # ─────────────────────────────────────────────────────────────────────────────
@@ -13,24 +13,36 @@
 # ── EVE ESI Application ──────────────────────────────────────────────────────
 client_id: "YOUR_ESI_CLIENT_ID_HERE"
 
+# The callback URL registered in your ESI app at developers.eveonline.com.
+# This must match EXACTLY — character for character — including trailing slashes.
+# The URL does not need to be reachable; after login your browser will redirect
+# there, show an error, and you paste the URL into the terminal.
+# Recommended value (simple, easy to register):
+callback_url: "http://localhost/callback"
+
 
 # ── Location (required) ───────────────────────────────────────────────────────
-# The station or Upwell structure ID where the corp hangar lives.
+# Station or Upwell structure ID where the corp hangar lives.
 #   NPC stations    : 8-digit IDs  e.g. 60003760 = Jita 4-4
 #   Player structures: 13-digit IDs e.g. 1030049082235
 # Find it at https://everef.net/search or via Show Info in-game.
-location_id: 60003760
+location_id:
 
 
 # ── Container filter (recommended) ───────────────────────────────────────────
-# Leave container_id blank on the first run — the bot will list every container
-# at location_id so you can pick the right one and paste its ID here.
-container_id:    # e.g. 1038291837452
+# Leave blank on the first run — the bot lists every container at location_id
+# so you can pick the right one. Paste its item_id here afterwards.
+container_id
+
+# Hangar slot (CorpSAG1–7, Hangar, HangarAll) where the container lives.
+# Used to verify the container is in the expected division.
+# Leave blank to skip this check.
+hangar_flag:
 
 
 # ── Alert threshold ───────────────────────────────────────────────────────────
-# Fire an alert when total fuel blocks fall below this number.
-# Set to 0 to disable (reports still post on every check).
+# Fire a warning when total fuel blocks fall below this number.
+# Set to 0 to disable alerts (reports still post on every check).
 alert_threshold: 500
 
 
@@ -39,11 +51,7 @@ discord:
   # Full webhook URL from Discord channel → Integrations → Webhooks.
   webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
 
-  # post_on_alert_only: false → post a report on every check  (default)
-  # post_on_alert_only: true  → only post when fuel is below alert_threshold
-  post_on_alert_only: false
-
-  # Optional: Discord role ID to @mention when an alert fires.
-  # Enable Developer Mode in Discord, then right-click the role → Copy Role ID.
+  # Optional: Discord role ID to @mention when fuel is below alert_threshold.
+  # Enable Developer Mode in Discord, right-click the role → Copy Role ID.
   # Leave blank ("") to disable mentions.
   mention_role_id: ""

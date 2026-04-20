@@ -33,6 +33,7 @@ USER appuser
 # Environment defaults (override in docker-compose or with -e flags)
 ENV CONFIG_PATH=/data/config.yaml \
     TOKEN_PATH=/data/tokens.json  \
+    STATE_PATH=/data/state.json   \
     PYTHONUNBUFFERED=1
 
 # Default: watch mode, interval supplied via CMD or WATCH_INTERVAL env

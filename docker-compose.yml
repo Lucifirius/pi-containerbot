@@ -6,11 +6,12 @@ x-common: &common
   image: eve-fuel-monitor
   volumes:
     # Local data/ directory is mounted at /data inside the container.
-    # config.yaml is read from here; tokens.json is written here.
+    # config.yaml is read from here; tokens.json and state.json are written here.
     - ./data:/data
   environment:
     CONFIG_PATH:      /data/config.yaml
     TOKEN_PATH:       /data/tokens.json
+    STATE_PATH:       /data/state.json
     PYTHONUNBUFFERED: "1"
 
 services:
@@ -36,7 +37,8 @@ services:
     tty: true          # allocate a pseudo-TTY for a clean prompt
 
   # ── monitor ─────────────────────────────────────────────────────────────────
-  # Long-running service — polls ESI and posts to Discord on a schedule.
+  # Long-running service — polls ESI every hour and posts to Discord only when
+  # the fuel count changes.
   #
   #   docker compose up -d monitor
   #   docker compose logs -f monitor
@@ -47,6 +49,7 @@ services:
     environment:
       CONFIG_PATH:      /data/config.yaml
       TOKEN_PATH:       /data/tokens.json
+      STATE_PATH:       /data/state.json
       PYTHONUNBUFFERED: "1"
       WATCH_INTERVAL:   "60"    # minutes between checks; override in .env
     restart: unless-stopped
